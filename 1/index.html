@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Advanced Touchpad</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #touchArea {
+            width: 100vw;
+            height: 100vh;
+            background-color: #df3d11;
+            touch-action: none;
+            position: relative;
+        }
+        #statusIndicator {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            padding: 5px 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="touchArea"></div>
+    <div id="statusIndicator">Status: Ready</div>
+    <script>
+        const touchArea = document.getElementById('touchArea');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const serverIP = "0.0.0.0";
+        const serverPort = 5000;
+
+        const socket = new WebSocket(`ws://${serverIP}:${serverPort}`);
+        let lastX = null, lastY = null;
+        let lastTapTime = 0;
+        let touchStartTime = 0;
+        let isDragging = false;
+        let longPressTimer = null;
+
+        // Connection status handling
+        socket.onopen = () => {
+            console.log("Connected to server");
+            updateStatus("Connected");
+        };
+
+        socket.onerror = (err) => {
+            console.error("WebSocket error:", err);
+            updateStatus("Error");
+        };
+
+        socket.onclose = () => {
+            updateStatus("Disconnected");
+        };
+
+        function updateStatus(status) {
+            statusIndicator.textContent = `Status: ${status}`;
+        }
+
+        // Touch start handler
+        touchArea.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            lastX = touch.clientX;
+            lastY = touch.clientY;
+            touchStartTime = Date.now();
+
+            // Start timer for potential right-click (long press)
+            longPressTimer = setTimeout(() => {
+                socket.send(JSON.stringify({ type: "right_tap" }));
+                updateStatus("Right Click");
+            }, 500);
+
+            if (e.touches.length === 2) {
+                // Two finger touch - prepare for scrolling
+                lastX = null;
+                lastY = null;
+                clearTimeout(longPressTimer);
+            }
+        });
+
+        // Touch move handler
+        touchArea.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            clearTimeout(longPressTimer);
+
+            if (e.touches.length === 2) {
+                // Handle scrolling with two fingers
+                const touch1 = e.touches[0];
+                const touch2 = e.touches[1];
+                if (lastY !== null) {
+                    const avgY = (touch1.clientY + touch2.clientY) / 2;
+                    const dy = (lastY - avgY) / 50;
+                    socket.send(JSON.stringify({
+                        type: "scroll",
+                        scroll_dx: 0,
+                        scroll_dy: dy
+                    }));
+                }
+                lastY = (touch1.clientY + touch2.clientY) / 2;
+            } else if (e.touches.length === 1) {
+                const touch = e.touches[0];
+                if (lastX !== null && lastY !== null) {
+                    const dx = (touch.clientX - lastX) * 2;
+                    const dy = (touch.clientY - lastY) * 2;
+                    
+                    if (isDragging) {
+                        socket.send(JSON.stringify({ dx, dy }));
+                        updateStatus("Dragging");
+                    } else {
+                        socket.send(JSON.stringify({ dx, dy }));
+                        updateStatus("Moving");
+                    }
+                }
+                lastX = touch.clientX;
+                lastY = touch.clientY;
+            }
+        });
+
+        // Touch end handler
+        touchArea.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            clearTimeout(longPressTimer);
+
+            if (isDragging) {
+                socket.send(JSON.stringify({ type: "drag_end" }));
+                isDragging = false;
+                updateStatus("Drag End");
+                return;
+            }
+
+            const touchEndTime = Date.now();
+            const touchDuration = touchEndTime - touchStartTime;
+
+            if (touchDuration < 200) {
+                // Check for double tap
+                if (touchEndTime - lastTapTime < 300) {
+                    socket.send(JSON.stringify({ type: "double_tap" }));
+                    updateStatus("Double Click");
+                    lastTapTime = 0;
+                } else {
+                    socket.send(JSON.stringify({ type: "single_tap" }));
+                    updateStatus("Single Click");
+                    lastTapTime = touchEndTime;
+                }
+            }
+
+            lastX = null;
+            lastY = null;
+        });
+
+        // Handle drag gesture
+        let doubleTapTimer = null;
+        touchArea.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                if (doubleTapTimer) {
+                    clearTimeout(doubleTapTimer);
+                    doubleTapTimer = null;
+                    isDragging = true;
+                    socket.send(JSON.stringify({ type: "drag_start" }));
+                    updateStatus("Drag Start");
+                } else {
+                    doubleTapTimer = setTimeout(() => {
+                        doubleTapTimer = null;
+                    }, 300);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
