@@ -1,0 +1,1 @@
+# 365_days_of_mini_projects
